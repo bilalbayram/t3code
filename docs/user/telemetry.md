@@ -11,8 +11,8 @@ T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect conne
 
 To disable product usage events and relay tracing, set `T3CODE_TELEMETRY_ENABLED=false` in
 the server or desktop app's environment before starting it. The opt-out also applies to the
-desktop renderer and the local web app served by that server. Restart the app or server and
-reload any already-open local web pages after changing the environment.
+desktop renderer and the local web app served by that server, before either starts relay tracing.
+Restart the app or server and reload any already-open local web pages after changing the environment.
 
 Relay tracing also honors `T3CODE_OTEL_SDK_DISABLED=true` and `OTEL_SDK_DISABLED=true`.
 An explicit `T3CODE_OTEL_SDK_DISABLED` value takes precedence over `OTEL_SDK_DISABLED`,

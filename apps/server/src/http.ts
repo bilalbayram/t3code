@@ -652,13 +652,16 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
         Stream.decodeText(),
         Stream.mkString,
       );
-      return HttpServerResponse.text(
-        html.replace(
-          /<head\b[^>]*>/i,
-          '$&<meta name="t3code-relay-telemetry-enabled" content="false">',
-        ),
-        { headers, contentType: "text/html; charset=utf-8" },
-      );
+      const marker = '<meta name="t3code-relay-telemetry-enabled" content="false">';
+      const head = /<head\b[^>]*>/i.exec(html);
+      // HTML may omit its head or even its html tag. Keep a leading doctype first.
+      const opening = head ?? /<html\b[^>]*>/i.exec(html) ?? /^\s*<!doctype\b[^>]*>/i.exec(html);
+      const offset = opening ? opening.index + opening[0].length : 0;
+      const bootstrap = head ? marker : `<head>${marker}</head>`;
+      return HttpServerResponse.text(html.slice(0, offset) + bootstrap + html.slice(offset), {
+        headers,
+        contentType: "text/html; charset=utf-8",
+      });
     }
 
     const contentType = isHtml ? "text/html; charset=utf-8" : mimeType;
