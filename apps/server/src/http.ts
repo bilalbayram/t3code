@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import { isRelayClientTracingEnabled } from "@t3tools/shared/relayTracing";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -643,6 +644,21 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
         status: 304,
         headers: { ...headers, Vary: "Accept-Encoding" },
       });
+    }
+
+    if (isHtml && !isRelayClientTracingEnabled(process.env)) {
+      // Resolve the opt-out before renderer modules initialize their tracing layer.
+      const html = yield* streamStaticFile(opened.file, fileInfo.size).pipe(
+        Stream.decodeText(),
+        Stream.mkString,
+      );
+      return HttpServerResponse.text(
+        html.replace(
+          /<head\b[^>]*>/i,
+          '$&<meta name="t3code-relay-telemetry-enabled" content="false">',
+        ),
+        { headers, contentType: "text/html; charset=utf-8" },
+      );
     }
 
     const contentType = isHtml ? "text/html; charset=utf-8" : mimeType;
