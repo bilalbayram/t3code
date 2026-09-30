@@ -1,4 +1,5 @@
 import * as Mime from "effect/unstable/http/Mime";
+import { parse, type DefaultTreeAdapterTypes } from "parse5";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -653,11 +654,22 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
         Stream.mkString,
       );
       const marker = '<meta name="t3code-relay-telemetry-enabled" content="false">';
-      const head = /<head\b[^>]*>/i.exec(html);
-      // HTML may omit its head or even its html tag. Keep a leading doctype first.
-      const opening = head ?? /<html\b[^>]*>/i.exec(html) ?? /^\s*<!doctype\b[^>]*>/i.exec(html);
-      const offset = opening ? opening.index + opening[0].length : 0;
-      const bootstrap = head ? marker : `<head>${marker}</head>`;
+      const document = parse(html, { sourceCodeLocationInfo: true });
+      const root = document.childNodes.find(
+        (node): node is DefaultTreeAdapterTypes.Element =>
+          "tagName" in node && node.tagName === "html",
+      );
+      const head = root?.childNodes.find(
+        (node): node is DefaultTreeAdapterTypes.Element =>
+          "tagName" in node && node.tagName === "head",
+      );
+      // Parser locations exclude comments, quoted attributes, and ignored duplicate tags.
+      // Splice the original source rather than serializing and rewriting the document.
+      const headOpening = head?.sourceCodeLocation?.startTag;
+      const opening = headOpening ?? root?.sourceCodeLocation?.startTag;
+      const doctype = document.childNodes.find((node) => node.nodeName === "#documentType");
+      const offset = opening?.endOffset ?? doctype?.sourceCodeLocation?.endOffset ?? 0;
+      const bootstrap = headOpening ? marker : `<head>${marker}</head>`;
       return HttpServerResponse.text(html.slice(0, offset) + bootstrap + html.slice(offset), {
         headers,
         contentType: "text/html; charset=utf-8",

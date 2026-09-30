@@ -2,6 +2,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
+import { parse, type DefaultTreeAdapterTypes } from "parse5";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
@@ -1836,7 +1837,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("bootstraps relay telemetry opt-out when HTML omits the head tag", () =>
+  it.effect("bootstraps relay telemetry opt-out across HTML parsing edge cases", () =>
     Effect.gen(function* () {
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
       vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
@@ -1851,6 +1852,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         `<!DOCTYPE html><HTML lang="en">${script}<body>résumé</body></HTML>`,
         `<!doctype html>${script}<p>résumé</p>`,
         `${script}<p>résumé</p>`,
+        `<!doctype html><!-- <head> placeholder --><html><body>${script}résumé</body></html>`,
+        `<!doctype html><html><head data-note="a > b">${script}</head><body>résumé</body></html>`,
+        `<!doctype html><html data-note='a > b'><body>${script}résumé</body></html>`,
+        `<!-- <html><head> -->\n<!doctype html>${script}<p>résumé</p>`,
+        `<!doctype html><html><head><title>&lt;head&gt;</title>${script}</head><body>résumé</body></html>`,
+        `<!doctype html>${script}<html><head></head><body>résumé</body></html>`,
       ]) {
         yield* fileSystem.writeFileString(path.join(staticDir, "index.html"), html);
         const response = yield* HttpClient.get("/", {
@@ -1862,6 +1869,29 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.isBelow(body.indexOf(marker), body.indexOf(script));
         assert.include(body, "résumé");
         assert.equal(response.headers["content-length"], String(Buffer.byteLength(body)));
+        const document = parse(body, { sourceCodeLocationInfo: true });
+        const root = document.childNodes.find(
+          (node): node is DefaultTreeAdapterTypes.Element =>
+            "tagName" in node && node.tagName === "html",
+        );
+        const head = root?.childNodes.find(
+          (node): node is DefaultTreeAdapterTypes.Element =>
+            "tagName" in node && node.tagName === "head",
+        );
+        const meta = head?.childNodes.find(
+          (node): node is DefaultTreeAdapterTypes.Element =>
+            "tagName" in node &&
+            node.tagName === "meta" &&
+            node.attrs.some(
+              (attr) => attr.name === "name" && attr.value === "t3code-relay-telemetry-enabled",
+            ),
+        );
+        assert.isDefined(
+          meta,
+          "opt-out must be an actual head element, not comment or attribute text",
+        );
+        assert.equal(meta?.attrs.find((attr) => attr.name === "content")?.value, "false");
+        assert.equal(document.mode, /<!doctype html>/i.test(html) ? "no-quirks" : "quirks");
         if (/^<!doctype/i.test(html)) {
           assert.match(body, /^<!doctype html>/i);
         }
