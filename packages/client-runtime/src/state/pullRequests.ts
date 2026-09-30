@@ -29,9 +29,8 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 export {
   type PullRequestDiffLoadError,
   PullRequestDiffCredentialRejectedError,
-  PullRequestDiffLoader,
-  pullRequestDiffLoaderLayer,
 } from "./pullRequestDiffHttp.ts";
+export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 
 /** @public Required to name the error in consumers' inferred pull request results. */
 export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(

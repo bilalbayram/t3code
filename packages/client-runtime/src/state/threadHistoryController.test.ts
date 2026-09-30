@@ -48,7 +48,7 @@ describe("ThreadHistoryController", () => {
 
       yield* controller.unregister(newerRegistration);
       expect(yield* controller.loadEarlier(ENV, THREAD)).toEqual({ _tag: "noop" });
-    }).pipe(Effect.provide(ThreadHistoryController.threadHistoryControllerLayer)),
+    }).pipe(Effect.provide(ThreadHistoryController.layer)),
   );
 
   it.effect("unregister removes only its own matching registration", () =>
@@ -58,6 +58,6 @@ describe("ThreadHistoryController", () => {
       const registration = yield* controller.register(ENV, THREAD, first);
       yield* controller.unregister(registration);
       expect(yield* controller.loadEarlier(ENV, THREAD)).toEqual({ _tag: "noop" });
-    }).pipe(Effect.provide(Layer.fresh(ThreadHistoryController.threadHistoryControllerLayer))),
+    }).pipe(Effect.provide(Layer.fresh(ThreadHistoryController.layer))),
   );
 });

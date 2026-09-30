@@ -147,7 +147,7 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
   });
   const historyController = yield* Effect.service(
     ThreadHistoryController.ThreadHistoryController,
-  ).pipe(Effect.provide(ThreadHistoryController.threadHistoryControllerLayer));
+  ).pipe(Effect.provide(ThreadHistoryController.layer));
   const historyHttpClient = HttpClient.make((request, url) =>
     Effect.gen(function* () {
       const response = yield* Deferred.make<OrchestrationV2ThreadHistoryPage>();

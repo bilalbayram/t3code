@@ -65,11 +65,7 @@ export class ShellSnapshotLoader extends Context.Service<
   }
 >()("@t3tools/client-runtime/state/shellSnapshotHttp/ShellSnapshotLoader") {}
 
-export const shellSnapshotLoaderLayer: Layer.Layer<
-  ShellSnapshotLoader,
-  never,
-  HttpClient.HttpClient
-> = Layer.effect(
+export const layer: Layer.Layer<ShellSnapshotLoader, never, HttpClient.HttpClient> = Layer.effect(
   ShellSnapshotLoader,
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;

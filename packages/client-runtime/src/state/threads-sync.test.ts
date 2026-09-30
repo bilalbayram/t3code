@@ -234,7 +234,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     );
   }
   const historyController = yield* ThreadHistoryController.ThreadHistoryController.pipe(
-    Effect.provide(ThreadHistoryController.threadHistoryControllerLayer),
+    Effect.provide(ThreadHistoryController.layer),
   );
   if (options?.historyPaging !== "no-controller") {
     makeThreadState = makeThreadState.pipe(
