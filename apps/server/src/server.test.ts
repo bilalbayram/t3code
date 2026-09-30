@@ -1792,6 +1792,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("bootstraps relay telemetry opt-out in static HTML before renderer scripts", () =>
+    Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-static-optout-" });
+      const html =
+        '<!doctype html><html><head><script type="module" src="/app.js"></script></head><body>résumé</body></html>';
+      const disabledHtml =
+        '<!doctype html><html><head><meta name="t3code-relay-telemetry-enabled" content="false"><script type="module" src="/app.js"></script></head><body>résumé</body></html>';
+      yield* fileSystem.writeFileString(path.join(staticDir, "index.html"), html);
+      yield* fileSystem.writeFileString(path.join(staticDir, "app.js"), "export const app = true;");
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      for (const [telemetryEnabled, t3SdkDisabled, otelSdkDisabled, expected] of [
+        ["false", "false", "false", disabledHtml],
+        ["true", "true", "false", disabledHtml],
+        ["true", undefined, "true", disabledHtml],
+        ["true", "false", "true", html],
+        [undefined, undefined, undefined, html],
+      ] as const) {
+        vi.stubEnv("T3CODE_TELEMETRY_ENABLED", telemetryEnabled);
+        vi.stubEnv("T3CODE_OTEL_SDK_DISABLED", t3SdkDisabled);
+        vi.stubEnv("OTEL_SDK_DISABLED", otelSdkDisabled);
+        for (const resource of ["/", "/index.html", "/threads/example"]) {
+          const response = yield* HttpClient.get(resource, {
+            headers: { "accept-encoding": "identity", "if-none-match": "*" },
+          });
+          assert.equal(response.status, 200);
+          assert.equal(yield* response.text, expected);
+          assert.equal(response.headers["cache-control"], "no-cache");
+          assert.equal(response.headers["content-length"], String(Buffer.byteLength(expected)));
+        }
+        const head = yield* HttpClient.head("/", {
+          headers: { "accept-encoding": "identity" },
+        });
+        assert.equal(head.headers["content-length"], String(Buffer.byteLength(expected)));
+        assert.equal(yield* head.text, "");
+        const asset = yield* HttpClient.get("/app.js");
+        assert.equal(yield* asset.text, "export const app = true;");
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("revalidates static files without sending unchanged bodies", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
