@@ -1836,6 +1836,39 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("bootstraps relay telemetry opt-out when HTML omits the head tag", () =>
+    Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+      vi.stubEnv("T3CODE_TELEMETRY_ENABLED", "false");
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-static-no-head-" });
+      yield* buildAppUnderTest({ config: { staticDir } });
+      const script = '<script type="module" src="/app.js"></script>';
+      const marker = '<meta name="t3code-relay-telemetry-enabled" content="false">';
+      for (const html of [
+        `<!doctype html><html><body>${script}résumé</body></html>`,
+        `<!DOCTYPE html><HTML lang="en">${script}<body>résumé</body></HTML>`,
+        `<!doctype html>${script}<p>résumé</p>`,
+        `${script}<p>résumé</p>`,
+      ]) {
+        yield* fileSystem.writeFileString(path.join(staticDir, "index.html"), html);
+        const response = yield* HttpClient.get("/", {
+          headers: { "accept-encoding": "identity" },
+        });
+        const body = yield* response.text;
+        assert.equal(response.status, 200);
+        assert.include(body, marker);
+        assert.isBelow(body.indexOf(marker), body.indexOf(script));
+        assert.include(body, "résumé");
+        assert.equal(response.headers["content-length"], String(Buffer.byteLength(body)));
+        if (/^<!doctype/i.test(html)) {
+          assert.match(body, /^<!doctype html>/i);
+        }
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("revalidates static files without sending unchanged bodies", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
