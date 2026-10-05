@@ -536,9 +536,13 @@ const HTML_BOOTSTRAP_PREFIX_BYTES = 65_536n;
 const RELAY_TELEMETRY_OPT_OUT_META = '<meta name="t3code-relay-telemetry-enabled" content="false">';
 
 const injectRelayTelemetryOptOut = (prefix: Uint8Array): Uint8Array => {
+  // Browsers strip a byte order mark before tokenizing, so the doctype must stay right after it.
+  const bom = prefix[0] === 0xef && prefix[1] === 0xbb && prefix[2] === 0xbf ? 3 : 0;
   // Latin-1 maps one byte to one code unit, so parser offsets are byte offsets and a
   // multi-byte character split by the prefix boundary cannot shift them.
-  const document = parse(Buffer.from(prefix).toString("latin1"), { sourceCodeLocationInfo: true });
+  const document = parse(Buffer.from(prefix.subarray(bom)).toString("latin1"), {
+    sourceCodeLocationInfo: true,
+  });
   const root = document.childNodes.find(
     (node): node is DefaultTreeAdapterTypes.Element => "tagName" in node && node.tagName === "html",
   );
@@ -550,12 +554,16 @@ const injectRelayTelemetryOptOut = (prefix: Uint8Array): Uint8Array => {
   const headOpening = head?.sourceCodeLocation?.startTag;
   const opening = headOpening ?? root?.sourceCodeLocation?.startTag;
   const doctype = document.childNodes.find((node) => node.nodeName === "#documentType");
-  const offset = opening?.endOffset ?? doctype?.sourceCodeLocation?.endOffset ?? 0;
+  const offset = bom + (opening?.endOffset ?? doctype?.sourceCodeLocation?.endOffset ?? 0);
   // A head opening beyond the prefix is ignored by browsers once this one exists.
   const bootstrap = headOpening
     ? RELAY_TELEMETRY_OPT_OUT_META
     : `<head>${RELAY_TELEMETRY_OPT_OUT_META}</head>`;
-  return Buffer.concat([prefix.subarray(0, offset), Buffer.from(bootstrap), prefix.subarray(offset)]);
+  return Buffer.concat([
+    prefix.subarray(0, offset),
+    Buffer.from(bootstrap),
+    prefix.subarray(offset),
+  ]);
 };
 
 const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
