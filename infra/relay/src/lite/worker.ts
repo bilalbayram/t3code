@@ -8,6 +8,8 @@
 //   access token at /v1/client/dpop-token, then registers devices and Live Activities with it. The
 //   DPoP proofs it sends are accepted without checking; the token alone authorises.
 // - Every registered device is the owner's, so every publish goes to every device.
+// - Like T3 Connect, the app lists your servers here and connects to one through its tunnel with a
+//   credential the relay asks that server for (connect.ts). The same client token authorises it.
 
 import type {
   RelayAgentActivityAggregateState,
@@ -25,6 +27,7 @@ import {
   isTerminalPhase,
 } from "../agentActivity/agentActivityPayloads.ts";
 import * as Apns from "./apns.ts";
+import * as Connect from "./connect.ts";
 import { chooseDelivery, type Delivery, type Target } from "./deliver.ts";
 
 export interface Env {
@@ -34,10 +37,12 @@ export interface Env {
   readonly APNS_TEAM_ID: string;
   readonly APNS_KEY_ID: string;
   readonly APNS_PRIVATE_KEY: string;
+  /** Ed25519 PKCS#8 PEM; servers hold its public half as their `cloudMintPublicKey`. */
+  readonly RELAY_MINT_PRIVATE_KEY: string;
 }
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
-const MOBILE_SCOPES = new Set(["mobile:registration"]);
+const CLIENT_SCOPES = new Set(["mobile:registration", "environment:connect", "environment:status"]);
 const PHASES = new Set([
   "starting",
   "running",
@@ -332,9 +337,12 @@ async function exchangeToken(request: Request, env: Env): Promise<Response> {
     return unauthorized();
   const scope = (form.get("scope") ?? "").trim();
   const scopes = scope.split(/\s+/).filter(Boolean);
-  if (scopes.length === 0 || !scopes.every((name) => MOBILE_SCOPES.has(name))) {
+  if (scopes.length === 0 || !scopes.every((name) => CLIENT_SCOPES.has(name))) {
     return json(
-      { _tag: "RelayForbiddenError", message: "This relay grants mobile:registration only." },
+      {
+        _tag: "RelayForbiddenError",
+        message: `This relay grants ${[...CLIENT_SCOPES].join(", ")}.`,
+      },
       403,
     );
   }
@@ -354,10 +362,10 @@ async function registerDevice(request: Request, env: Env): Promise<Response> {
   }
   const optional = (value: unknown) => (nonEmpty(value) ? value.trim() : null);
   await env.DB.prepare(
-    `INSERT INTO devices (device_id, label, platform, bundle_id, aps_environment, push_token, preferences_json, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    `INSERT INTO devices (device_id, label, platform, bundle_id, aps_environment, push_token, preferences_json, updated_at, registration_json)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
      ON CONFLICT (device_id) DO UPDATE SET label = ?2, platform = ?3, bundle_id = ?4, aps_environment = ?5,
-       push_token = ?6, preferences_json = ?7, updated_at = ?8`,
+       push_token = ?6, preferences_json = ?7, updated_at = ?8, registration_json = ?9`,
   )
     .bind(
       body.deviceId.trim(),
@@ -368,6 +376,8 @@ async function registerDevice(request: Request, env: Env): Promise<Response> {
       optional(body.pushToken),
       JSON.stringify(body.preferences ?? null),
       new Date().toISOString(),
+      // Kept for the app's device list; the tokens stay in their own columns only.
+      JSON.stringify({ ...body, pushToken: undefined, pushToStartToken: undefined }),
     )
     .run();
   return json({ ok: true });
@@ -458,9 +468,224 @@ async function sweep(env: Env): Promise<void> {
   if (aggregate === null) await fanOut(env, idle, null, true);
 }
 
+async function environmentRow(
+  env: Env,
+  environmentId: string,
+): Promise<Connect.EnvironmentRow | null> {
+  return env.DB.prepare(
+    "SELECT environment_id, label, http_base_url, ws_base_url, lan_url, linked_at FROM environments WHERE environment_id = ?1",
+  )
+    .bind(environmentId)
+    .first<Connect.EnvironmentRow>();
+}
+
+/** A server says where the app finds it: its tunnel and, optionally, its LAN address. */
+async function registerEnvironment(
+  request: Request,
+  env: Env,
+  environmentId: string,
+): Promise<Response> {
+  if (!(await sameSecret(bearer(request), env.RELAY_ENVIRONMENT_CREDENTIAL))) return unauthorized();
+  const body = parseJson<Record<string, unknown>>(await request.text());
+  const httpBaseUrl = nonEmpty(body?.httpBaseUrl) ? body.httpBaseUrl.trim() : "";
+  if (!body || !nonEmpty(body.label) || !httpBaseUrl.startsWith("https://")) {
+    return badRequest("An environment needs a label and an https tunnel URL.");
+  }
+  const base = new URL(httpBaseUrl);
+  const wsBaseUrl = new URL(base);
+  wsBaseUrl.protocol = "wss:";
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO environments (environment_id, label, http_base_url, ws_base_url, lan_url, linked_at, updated_at, runtime_json)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
+     ON CONFLICT (environment_id) DO UPDATE SET label = ?2, http_base_url = ?3, ws_base_url = ?4, lan_url = ?5,
+       updated_at = ?6, runtime_json = ?7`,
+  )
+    .bind(
+      environmentId,
+      body.label.trim(),
+      base.toString(),
+      wsBaseUrl.toString(),
+      nonEmpty(body.lanUrl) ? body.lanUrl.trim() : null,
+      now,
+      body.endpointRuntime && typeof body.endpointRuntime === "object"
+        ? JSON.stringify(body.endpointRuntime)
+        : null,
+    )
+    .run();
+  return json({ ok: true });
+}
+
+async function listEnvironments(env: Env): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT environment_id, label, http_base_url, ws_base_url, lan_url, linked_at FROM environments ORDER BY linked_at",
+  ).all<Connect.EnvironmentRow>();
+  return json({ environments: results.map(Connect.recordOf) });
+}
+
+async function listDevices(env: Env, version: 1 | 2): Promise<Response> {
+  const { results } = await env.DB.prepare(
+    "SELECT device_id, label, platform, preferences_json, registration_json, updated_at FROM devices ORDER BY updated_at DESC",
+  ).all<{
+    device_id: string;
+    label: string;
+    platform: string;
+    preferences_json: string;
+    registration_json: string | null;
+    updated_at: string;
+  }>();
+  const devices = results.flatMap((row) => {
+    const registration = parseJson<Record<string, unknown>>(row.registration_json) ?? {};
+    const preferences = parseJson<RelayAgentAwarenessPreferences>(row.preferences_json);
+    const iosMajorVersion =
+      typeof registration.iosMajorVersion === "number" ? registration.iosMajorVersion : null;
+    // Version 1 clients decode iOS devices only.
+    if (version === 1 && (row.platform !== "ios" || iosMajorVersion === null)) return [];
+    return [
+      {
+        deviceId: row.device_id,
+        label: row.label,
+        platform: row.platform,
+        iosMajorVersion,
+        ...(version === 2
+          ? {
+              androidApiLevel:
+                typeof registration.androidApiLevel === "number"
+                  ? registration.androidApiLevel
+                  : null,
+            }
+          : {}),
+        appVersion: nonEmpty(registration.appVersion) ? registration.appVersion : null,
+        notifications: {
+          enabled: preferences?.notificationsEnabled ?? false,
+          notifyOnApproval: preferences?.notifyOnApproval ?? false,
+          notifyOnInput: preferences?.notifyOnInput ?? false,
+          notifyOnCompletion: preferences?.notifyOnCompletion ?? false,
+          notifyOnFailure: preferences?.notifyOnFailure ?? false,
+        },
+        liveActivities: { enabled: preferences?.liveActivitiesEnabled ?? false },
+        updatedAt: row.updated_at,
+      },
+    ];
+  });
+  return json({ devices });
+}
+
+async function connectEnvironment(
+  request: Request,
+  env: Env,
+  environmentId: string,
+): Promise<Response> {
+  const row = await environmentRow(env, environmentId);
+  if (!row)
+    return json({ _tag: "RelayEnvironmentNotFoundError", message: "No such environment." }, 404);
+  const body = parseJson<Record<string, unknown>>(await request.text()) ?? {};
+  const thumbprint = nonEmpty(body.clientProofKeyThumbprint)
+    ? body.clientProofKeyThumbprint
+    : nonEmpty(body.clientKeyThumbprint)
+      ? body.clientKeyThumbprint
+      : null;
+  if (!thumbprint) return badRequest("Connecting needs the client's proof key thumbprint.");
+  const minted = await Connect.mintCredential({
+    key: await Connect.mintKey(env.RELAY_MINT_PRIVATE_KEY),
+    issuer: Connect.relayIssuer(request.url),
+    row,
+    clientProofKeyThumbprint: thumbprint,
+    deviceId: nonEmpty(body.deviceId) ? body.deviceId : null,
+  });
+  if (!minted.ok) {
+    console.error("Minting a connect credential failed", {
+      environmentId,
+      status: minted.status,
+      error: minted.error,
+    });
+    return json({ _tag: "RelayEnvironmentUnavailableError", message: minted.error }, 502);
+  }
+  return json({
+    environmentId,
+    endpoint: Connect.endpointOf(row),
+    credential: minted.value.credential,
+    expiresAt: minted.value.expiresAt,
+  });
+}
+
+async function environmentStatus(
+  request: Request,
+  env: Env,
+  environmentId: string,
+): Promise<Response> {
+  const row = await environmentRow(env, environmentId);
+  if (!row)
+    return json({ _tag: "RelayEnvironmentNotFoundError", message: "No such environment." }, 404);
+  const health = await Connect.checkHealth({
+    key: await Connect.mintKey(env.RELAY_MINT_PRIVATE_KEY),
+    issuer: Connect.relayIssuer(request.url),
+    row,
+  });
+  const checkedAt = new Date().toISOString();
+  return json(
+    health.ok
+      ? {
+          environmentId,
+          endpoint: Connect.endpointOf(row),
+          status: "online",
+          checkedAt: health.value.checkedAt ?? checkedAt,
+          descriptor: health.value.descriptor,
+        }
+      : {
+          environmentId,
+          endpoint: Connect.endpointOf(row),
+          status: "offline",
+          checkedAt,
+          error: health.error,
+          ...(health.status === null ? {} : { endpointStatus: health.status }),
+        },
+  );
+}
+
+async function unlinkEnvironment(env: Env, environmentId: string): Promise<Response> {
+  await env.DB.prepare("DELETE FROM environments WHERE environment_id = ?1")
+    .bind(environmentId)
+    .run();
+  return json({ ok: true });
+}
+
+/**
+ * The server registers the tunnel it runs, and asks for it again when cloudflared is rejected.
+ * This relay doesn't rotate tunnels, so it acknowledges one and hands back the registered config.
+ */
+async function managedTunnel(
+  request: Request,
+  env: Env,
+  environmentId: string,
+  action: "register" | "recover",
+): Promise<Response> {
+  if (!(await sameSecret(bearer(request), env.RELAY_ENVIRONMENT_CREDENTIAL))) return unauthorized();
+  const row = await env.DB.prepare(
+    "SELECT environment_id, label, http_base_url, ws_base_url, lan_url, linked_at, runtime_json FROM environments WHERE environment_id = ?1",
+  )
+    .bind(environmentId)
+    .first<Connect.EnvironmentRow & { runtime_json: string | null }>();
+  if (action === "register") return json({ status: "ready" });
+  const runtime = parseJson<Record<string, unknown>>(row?.runtime_json ?? null);
+  if (!row || !runtime) {
+    return json(
+      {
+        _tag: "RelayEnvironmentNotFoundError",
+        message: "No tunnel is registered for this environment.",
+      },
+      404,
+    );
+  }
+  return json({ endpoint: Connect.endpointOf(row), endpointRuntime: runtime });
+}
+
 const PUBLISH = /^\/v1\/environments\/([^/]+)\/threads\/([^/]+)\/agent-activity$/;
 const WAKE = /^\/v1\/environments\/[^/]+\/hooks\/wake$/;
 const DEVICE = /^\/v1\/mobile\/devices\/([^/]+)$/;
+const ENVIRONMENT = /^\/v1\/environments\/([^/]+)\/(connect|status|registration)$/;
+const TUNNEL = /^\/v1\/environments\/([^/]+)\/tunnel(\/recovery)?$/;
+const ENVIRONMENT_LINK = /^\/v1\/client\/environment-links\/([^/]+)$/;
 
 export async function handle(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
@@ -486,6 +711,45 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
       : unauthorized();
   }
   if (path === "/v1/client/dpop-token" && method === "POST") return exchangeToken(request, env);
+  // Servers verify the relay's mint JWTs with this; it is public by design.
+  if (path === "/v1/mint-public-key" && method === "GET") {
+    return json({ publicKey: (await Connect.mintKey(env.RELAY_MINT_PRIVATE_KEY)).publicKeyPem });
+  }
+
+  const tunnel = TUNNEL.exec(path);
+  if (tunnel && method === "POST") {
+    return managedTunnel(
+      request,
+      env,
+      decodeURIComponent(tunnel[1]!),
+      tunnel[2] ? "register" : "recover",
+    );
+  }
+
+  const environment = ENVIRONMENT.exec(path);
+  if (environment && method === "POST") {
+    const environmentId = decodeURIComponent(environment[1]!);
+    if (environment[2] === "registration") return registerEnvironment(request, env, environmentId);
+    if (!(await verifyAccessToken(env, request.headers.get("authorization"), nowSeconds)))
+      return unauthorized();
+    return environment[2] === "connect"
+      ? connectEnvironment(request, env, environmentId)
+      : environmentStatus(request, env, environmentId);
+  }
+
+  // What the managed relay checks with a Clerk session takes the client token here.
+  if (
+    path === "/v1/environments" ||
+    path.startsWith("/v1/client/") ||
+    path === "/v2/client/devices"
+  ) {
+    if (!(await sameSecret(bearer(request), env.RELAY_CLIENT_SECRET))) return unauthorized();
+    if (path === "/v1/environments" && method === "GET") return listEnvironments(env);
+    if (path === "/v1/client/devices" && method === "GET") return listDevices(env, 1);
+    if (path === "/v2/client/devices" && method === "GET") return listDevices(env, 2);
+    const link = ENVIRONMENT_LINK.exec(path);
+    if (link && method === "DELETE") return unlinkEnvironment(env, decodeURIComponent(link[1]!));
+  }
   // The app's telemetry goes to the relay's origin; there's nowhere to keep it, so it's dropped.
   if (path === "/v1/mobile/observe") return new Response(null, { status: 204 });
 

@@ -2,8 +2,11 @@ import { ClerkProvider, getClerkInstance } from "@clerk/expo";
 import { tokenCache } from "@clerk/expo/token-cache";
 import type { ReactNode } from "react";
 
-import { setAgentAwarenessRelayTokenProvider } from "../agent-awareness/remoteRegistration";
-import { cloudAccountService, deactivateCloudRelayAccount } from "./cloudAccountService";
+import {
+  activateCloudRelayAccount,
+  cloudAccountService,
+  deactivateCloudRelayAccount,
+} from "./cloudAccountService";
 import { resolveCloudPublicConfig, selfHostedRelayToken } from "./publicConfig";
 
 const cloudConfig = resolveCloudPublicConfig();
@@ -16,9 +19,9 @@ if (publishableKey) {
   // observes it for the app's lifetime without a React subscription.
   cloudAccountService.attach(getClerkInstance({ publishableKey }));
 } else if (selfHostedToken) {
-  // A relay you run yourself takes its token in place of a sign-in. It only carries agent
-  // awareness, so the managed relay session (T3 Connect's environments) stays off.
-  setAgentAwarenessRelayTokenProvider(async () => selfHostedToken, "self-hosted");
+  // A relay you run yourself takes its token in place of a sign-in, for everything T3 Connect
+  // does: your environments, connecting to them, notifications and Live Activities.
+  activateCloudRelayAccount("self-hosted", async () => selfHostedToken);
 } else {
   // Without cloud config no account can ever activate, so drop anything a
   // previous build with cloud enabled left registered.
