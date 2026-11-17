@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS devices (
   aps_environment TEXT,
   push_token TEXT,
   preferences_json TEXT NOT NULL,
+  registration_json TEXT,
   updated_at TEXT NOT NULL
 );
 
@@ -28,4 +29,17 @@ CREATE TABLE IF NOT EXISTS activity_rows (
   state_json TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (environment_id, thread_id)
+);
+
+-- Each linked T3 server: where the app reaches it through the relay (its tunnel) and on the LAN.
+CREATE TABLE IF NOT EXISTS environments (
+  environment_id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  http_base_url TEXT NOT NULL,
+  ws_base_url TEXT NOT NULL,
+  lan_url TEXT,
+  -- The Cloudflare Tunnel the server runs (RelayManagedEndpointRuntimeConfig), for recovery.
+  runtime_json TEXT,
+  linked_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );

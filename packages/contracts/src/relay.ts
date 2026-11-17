@@ -718,6 +718,11 @@ export const RelayClientEnvironmentRecord = Schema.Struct({
   label: TrimmedNonEmptyString,
   endpoint: RelayManagedEndpoint,
   linkedAt: TrimmedNonEmptyString,
+  /**
+   * The LAN address to reach the environment at in place of the IPs it reports, such as
+   * `http://bm1.local:3773/`, so a changed DHCP lease doesn't strand the route. Self-hosted relays only.
+   */
+  lanHttpBaseUrl: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type RelayClientEnvironmentRecord = typeof RelayClientEnvironmentRecord.Type;
 

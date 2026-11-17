@@ -27,7 +27,7 @@ import { FrostedCutout } from "../../components/ui/FrostedCutout";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { hasCloudPublicConfig, selfHostedRelayToken } from "../cloud/publicConfig";
 import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
 import {
   autoConnectReport,
@@ -290,7 +290,11 @@ function PairingForm({
             </Text>
           </View>
 
-          {hasCloudPublicConfig() ? <T3ConnectSection /> : null}
+          {hasCloudPublicConfig() ? (
+            <T3ConnectSection />
+          ) : selfHostedRelayToken() ? (
+            <SelfHostedRelaySection />
+          ) : null}
         </View>
       </ScrollView>
     </SettingsScreen>
@@ -389,6 +393,26 @@ function PairingScanCard(props: {
         </Text>
       </View>
     </Pressable>
+  );
+}
+
+function SelfHostedRelaySection() {
+  const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =
+    useRemoteConnections();
+  const { connectedCloudEnvironments } = splitEnvironmentSections({
+    connectedEnvironments,
+    cloudEnvironments: null,
+  });
+  return (
+    <View collapsable={false} className="gap-2">
+      <Text className="px-4 text-sm font-t3-medium text-foreground-muted">Or use your relay</Text>
+      <CloudEnvironmentRows
+        connectedCloudEnvironments={connectedCloudEnvironments}
+        onSetEnvironmentEnabled={onSetEnvironmentEnabled}
+        onRemoveEnvironment={onRemoveEnvironmentPress}
+        showHeader={false}
+      />
+    </View>
   );
 }
 
