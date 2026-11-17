@@ -18,6 +18,21 @@ const runtimeVersionPolicy =
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+// A build for your own paid team keeps push, App Groups and Live Activities, unlike a Personal Team
+// build: its bundle id and team replace T3's, and T3's hosted domains and Apple sign-in go.
+const ownTeamBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_ID?.trim() || null;
+const ownTeamId = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || null;
+if (
+  ownTeamBundleIdentifier !== null &&
+  (!IOS_BUNDLE_IDENTIFIER_PATTERN.test(ownTeamBundleIdentifier) ||
+    !ownTeamId ||
+    isIosPersonalTeamBuild)
+) {
+  throw new Error(
+    "T3CODE_IOS_BUNDLE_ID needs a reverse-DNS id and T3CODE_IOS_TEAM_ID, and doesn't combine with T3CODE_IOS_PERSONAL_TEAM.",
+  );
+}
+const isOwnTeamBuild = ownTeamBundleIdentifier !== null;
 
 // Compiled into the native project. Without a relay, Observe's native side could dispatch to
 // Expo's own ingest before observe.ts turns it off; `.invalid` never resolves (RFC 6761).
@@ -122,7 +137,7 @@ const variant = VARIANT_CONFIG[APP_VARIANT];
 const HOSTED_APP_HOST = "app.t3.codes";
 const iosBundleIdentifier = isIosPersonalTeamBuild
   ? personalTeamBundleIdentifier!
-  : variant.iosBundleIdentifier;
+  : (ownTeamBundleIdentifier ?? variant.iosBundleIdentifier);
 
 const dmSansFonts = {
   regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
@@ -246,7 +261,8 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
+    // T3's update channel ships T3's JavaScript, which an own-team build doesn't take.
+    enabled: !isOwnTeamBuild && repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
     url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
@@ -257,14 +273,19 @@ const config: ExpoConfig = {
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-      `applinks:${HOSTED_APP_HOST}`,
-    ],
+    appleTeamId: ownTeamId ?? "ARK85ZXQ4Z",
+    // T3's domains only vouch for T3's own bundle ids.
+    associatedDomains: isOwnTeamBuild
+      ? []
+      : [
+          `applinks:${variant.relyingParty}`,
+          `webcredentials:${variant.relyingParty}`,
+          `applinks:${HOSTED_APP_HOST}`,
+        ],
     entitlements: {
-      "keychain-access-groups": [`$(AppIdentifierPrefix)${variant.iosBundleIdentifier}`],
+      "keychain-access-groups": [
+        `$(AppIdentifierPrefix)${isOwnTeamBuild ? iosBundleIdentifier : variant.iosBundleIdentifier}`,
+      ],
     },
     infoPlist: {
       UISupportedInterfaceOrientations: [
@@ -371,7 +392,10 @@ const config: ExpoConfig = {
       },
     ],
     // Gate Clerk here: withoutIosPersonalTeamCapabilities runs too early to strip its entitlement.
-    ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
+    [
+      "@clerk/expo",
+      { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild && !isOwnTeamBuild },
+    ],
     "expo-web-browser",
     [
       "expo-quick-actions",
@@ -474,6 +498,8 @@ const config: ExpoConfig = {
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
+      // A relay you run yourself (infra/relay/src/lite) takes this in place of a Clerk sign-in.
+      selfHostedToken: repoEnv.T3CODE_RELAY_SELF_HOSTED_TOKEN ?? null,
     },
     clerk: {
       publishableKey: repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? null,

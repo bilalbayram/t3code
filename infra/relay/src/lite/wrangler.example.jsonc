@@ -1,0 +1,19 @@
+// Copy to wrangler.jsonc (gitignored) and fill in your own names, then see README.md.
+{
+  "name": "t3-relay-lite",
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-01",
+  // The T3 server only takes a bare https origin as its relay, so the relay gets its own hostname.
+  "routes": [{ "pattern": "relay.example.com", "custom_domain": true }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "t3-relay-lite",
+      "database_id": "<from wrangler d1 create>",
+    },
+  ],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": { "APNS_TEAM_ID": "<team id>", "APNS_KEY_ID": "<key id>" },
+  // Secrets (wrangler secret put): RELAY_CLIENT_SECRET, RELAY_ENVIRONMENT_CREDENTIAL, APNS_PRIVATE_KEY.
+  "observability": { "enabled": true },
+}

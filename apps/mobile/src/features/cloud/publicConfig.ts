@@ -21,6 +21,7 @@ export interface CloudPublicConfig {
   };
   readonly relay: {
     readonly url: string | null;
+    readonly selfHostedToken: string | null;
   };
   readonly observability: {
     readonly tracesUrl: string | null;
@@ -64,6 +65,7 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig
     },
     relay: {
       url: normalizeSecureRelayUrl(trimNonEmpty(extra?.relay?.url) ?? ""),
+      selfHostedToken: trimNonEmpty(extra?.relay?.selfHostedToken),
     },
     observability: {
       tracesUrl: normalizeSecureUrl(extra?.observability?.tracesUrl),
@@ -71,6 +73,16 @@ export function resolveCloudPublicConfig(extra: ExpoExtra = Constants.expoConfig
       tracesToken: trimNonEmpty(extra?.observability?.tracesToken),
     },
   } satisfies CloudPublicConfig;
+}
+
+/**
+ * The token for a relay you run yourself, which stands in for a T3 Connect sign-in. Only a build
+ * without Clerk has one: with Clerk, the managed relay and its sign-in are in charge.
+ */
+export function selfHostedRelayToken(
+  config: CloudPublicConfig = resolveCloudPublicConfig(),
+): string | null {
+  return config.relay.url && !config.clerk.publishableKey ? config.relay.selfHostedToken : null;
 }
 
 export function hasCloudPublicConfig(): boolean {
