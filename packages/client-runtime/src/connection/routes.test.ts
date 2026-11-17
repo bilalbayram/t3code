@@ -9,6 +9,7 @@ import {
 } from "./catalog.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
 import { BearerConnectionTarget, RelayConnectionTarget } from "./model.ts";
+import { setRelayLanHttpBaseUrl, withRelayLanHost } from "./lanHosts.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -168,6 +169,29 @@ describe("learned routes", () => {
       authorization: "t3-connect",
       wsBaseUrl: "ws://192.168.1.10:3773/",
     });
+  });
+
+  it("learns a self-hosted relay's LAN host in place of the reported IPs, then Tailscale, then the relay", () => {
+    const environmentId = EnvironmentId.make("environment-lan-host");
+    const entry: ConnectionCatalogEntry = {
+      ...relayOnly,
+      target: new RelayConnectionTarget({ environmentId, label: "bM1" }),
+    };
+    setRelayLanHttpBaseUrl(environmentId, "http://bm1.local:3773/");
+    const reported = withRelayLanHost(environmentId, [
+      { kind: "lan", httpBaseUrl: "http://192.168.1.10:3773/" },
+      { kind: "tailnet", httpBaseUrl: "http://100.64.0.7:3773/" },
+    ]);
+    setRelayLanHttpBaseUrl(environmentId, undefined);
+    const routes = mergeLearnedRoutes({ entry, activeRoute: RELAY, reported, allowInsecure: true });
+    expect(ids(routes)).toEqual([
+      `learned:${environmentId}:http://bm1.local:3773`,
+      `learned:${environmentId}:http://100.64.0.7:3773`,
+      "relay",
+    ]);
+    expect(profileOf(routes![0]!)).toMatchObject({ authorization: "t3-connect" });
+    expect(profileOf(routes![1]!)).toMatchObject({ network: "tailscale" });
+    expect(withRelayLanHost(environmentId, reported)).toBe(reported);
   });
 
   it("replaces a learned LAN address when the server reports a new one", () => {
