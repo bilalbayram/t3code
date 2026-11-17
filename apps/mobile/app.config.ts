@@ -274,14 +274,16 @@ const config: ExpoConfig = {
     bundleIdentifier: iosBundleIdentifier,
     // Avoid Personal Team fallback: it cannot sign App Groups, Apple sign-in or push entitlements.
     appleTeamId: ownTeamId ?? "ARK85ZXQ4Z",
-    // T3's domains only vouch for T3's own bundle ids.
-    associatedDomains: isOwnTeamBuild
-      ? []
-      : [
-          `applinks:${variant.relyingParty}`,
-          `webcredentials:${variant.relyingParty}`,
-          `applinks:${HOSTED_APP_HOST}`,
-        ],
+    // T3's domains only vouch for T3's own bundle ids, and even an empty list needs the capability.
+    ...(isOwnTeamBuild
+      ? {}
+      : {
+          associatedDomains: [
+            `applinks:${variant.relyingParty}`,
+            `webcredentials:${variant.relyingParty}`,
+            `applinks:${HOSTED_APP_HOST}`,
+          ],
+        }),
     entitlements: {
       "keychain-access-groups": [
         `$(AppIdentifierPrefix)${isOwnTeamBuild ? iosBundleIdentifier : variant.iosBundleIdentifier}`,
