@@ -157,7 +157,14 @@
     },
     "infra/relay": {
       // Alchemy loads src/worker.ts as the Worker entry and reads its default export.
-      "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!", "src/worker.ts!"],
+      // Relay lite is its own Worker, deployed with wrangler; contract-check.ts is run by hand.
+      "entry": [
+        "alchemy.run.ts!",
+        "src/persistence/schema.ts!",
+        "src/worker.ts!",
+        "src/lite/worker.ts!",
+        "src/lite/contract-check.ts",
+      ],
     },
     "packages/*": {
       // These workspace packages are private to this monorepo.
