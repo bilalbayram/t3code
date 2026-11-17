@@ -19,6 +19,7 @@ import Constants from "expo-constants";
 import * as Network from "expo-network";
 import { AppState } from "react-native";
 
+import { selfHostedRelayToken } from "../features/cloud/publicConfig";
 import { authClientMetadata } from "../lib/authClientMetadata";
 import * as Runtime from "../lib/runtime";
 import * as MobileStorage from "../persistence/mobile-storage";
@@ -135,8 +136,13 @@ const layerWakeups = Wakeups.layer({
           (subscription) => Effect.sync(() => subscription.remove()),
         ).pipe(Effect.asVoid),
       ),
-      managedRelayAccountChanges(appAtomRegistry).pipe(
-        Stream.map(() => "credentials-changed" as const),
+      // Account changes skip the account present at start. A self-hosted relay's token is there
+      // from launch, so it counts as just signed in, or its environments would never be listed.
+      Stream.concat(
+        selfHostedRelayToken() ? Stream.make("credentials-changed" as const) : Stream.empty,
+        managedRelayAccountChanges(appAtomRegistry).pipe(
+          Stream.map(() => "credentials-changed" as const),
+        ),
       ),
       networkPathChanges,
     ],
