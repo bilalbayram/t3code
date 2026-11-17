@@ -39,6 +39,8 @@ export interface Env {
   readonly APNS_PRIVATE_KEY: string;
   /** Ed25519 PKCS#8 PEM; servers hold its public half as their `cloudMintPublicKey`. */
   readonly RELAY_MINT_PRIVATE_KEY: string;
+  /** Lets the owner's admin page read the relay's state (GET /v1/admin/state); optional. */
+  readonly RELAY_ADMIN_TOKEN?: string;
 }
 
 const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
@@ -680,6 +682,97 @@ async function managedTunnel(
   return json({ endpoint: Connect.endpointOf(row), endpointRuntime: runtime });
 }
 
+/**
+ * Everything the relay holds, for the owner's admin page: servers (checked through their tunnels
+ * now), devices without their push tokens, Live Activities, thread states and the aggregate.
+ */
+async function adminState(request: Request, env: Env): Promise<Response> {
+  if (!env.RELAY_ADMIN_TOKEN || !(await sameSecret(bearer(request), env.RELAY_ADMIN_TOKEN))) {
+    return unauthorized();
+  }
+  const now = new Date();
+  const [environments, devices, states] = await Promise.all([
+    env.DB.prepare(
+      "SELECT environment_id, label, http_base_url, ws_base_url, lan_url, linked_at, updated_at, runtime_json FROM environments ORDER BY linked_at",
+    ).all<Connect.EnvironmentRow & { updated_at: string; runtime_json: string | null }>(),
+    env.DB.prepare(
+      `SELECT d.device_id, d.label, d.platform, d.bundle_id, d.aps_environment, d.push_token IS NOT NULL AS has_push_token,
+         d.preferences_json, d.registration_json, d.updated_at,
+         l.activity_push_token IS NOT NULL AS has_live_activity, l.armed_at, l.last_delivery_at, l.ended_at
+       FROM devices d LEFT JOIN live_activities l ON l.device_id = d.device_id ORDER BY d.updated_at DESC`,
+    ).all<Record<string, unknown>>(),
+    activeStates(env),
+  ]);
+  const key = await Connect.mintKey(env.RELAY_MINT_PRIVATE_KEY);
+  const issuer = Connect.relayIssuer(request.url);
+  const checked = await Promise.all(
+    environments.results.map(async (row) => {
+      const health = await Connect.checkHealth({ key, issuer, row });
+      const runtime = parseJson<Record<string, unknown>>(row.runtime_json);
+      const descriptor = health.ok
+        ? (health.value.descriptor as Record<string, unknown> | null)
+        : null;
+      return {
+        environmentId: row.environment_id,
+        label: row.label,
+        httpBaseUrl: row.http_base_url,
+        lanUrl: row.lan_url,
+        linkedAt: row.linked_at,
+        updatedAt: row.updated_at,
+        tunnel: runtime
+          ? { tunnelId: runtime.tunnelId ?? null, tunnelName: runtime.tunnelName ?? null }
+          : null,
+        status: health.ok ? "online" : "offline",
+        error: health.ok ? null : health.error,
+        serverLabel: descriptor?.label ?? null,
+        serverVersion: descriptor?.serverVersion ?? null,
+        platform: descriptor?.platform ?? null,
+      };
+    }),
+  );
+  return json({
+    checkedAt: now.toISOString(),
+    relay: {
+      issuer,
+      apns: {
+        teamId: env.APNS_TEAM_ID,
+        keyId: env.APNS_KEY_ID,
+        // A placeholder key id means pushes can't reach Apple yet.
+        configured: !/^TEST/.test(env.APNS_KEY_ID),
+      },
+    },
+    environments: checked,
+    devices: devices.results.map((row) => {
+      const registration =
+        parseJson<Record<string, unknown>>(row.registration_json as string | null) ?? {};
+      return {
+        deviceId: row.device_id,
+        label: row.label,
+        platform: row.platform,
+        bundleId: row.bundle_id,
+        apsEnvironment: row.aps_environment,
+        appVersion: registration.appVersion ?? null,
+        osMajorVersion: registration.iosMajorVersion ?? registration.androidApiLevel ?? null,
+        hasPushToken: Boolean(row.has_push_token),
+        preferences: parseJson(row.preferences_json as string),
+        updatedAt: row.updated_at,
+        liveActivity: {
+          active: Boolean(row.has_live_activity),
+          armedAt: row.armed_at ?? null,
+          lastDeliveryAt: row.last_delivery_at ?? null,
+          endedAt: row.ended_at ?? null,
+        },
+      };
+    }),
+    threads: states.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    aggregate: makeAggregateState({
+      activeStates: states,
+      terminalState: null,
+      nowMs: now.getTime(),
+    }),
+  });
+}
+
 const PUBLISH = /^\/v1\/environments\/([^/]+)\/threads\/([^/]+)\/agent-activity$/;
 const WAKE = /^\/v1\/environments\/[^/]+\/hooks\/wake$/;
 const DEVICE = /^\/v1\/mobile\/devices\/([^/]+)$/;
@@ -694,6 +787,7 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   if (path === "/health") return json({ ok: true });
+  if (path === "/v1/admin/state" && method === "GET") return adminState(request, env);
 
   const published = PUBLISH.exec(path);
   if (published && method === "POST") {
