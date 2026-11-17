@@ -40,6 +40,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import { withRelayLanHost } from "./lanHosts.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -946,7 +947,7 @@ export const make = Effect.gen(function* () {
         const routes = mergeLearnedRoutes({
           entry,
           activeRoute: input.activeRoute,
-          reported: input.reported,
+          reported: withRelayLanHost(input.environmentId, input.reported),
           allowInsecure: allowInsecureRoutes,
         });
         if (routes === null) return Option.none<ConnectionCatalogEntry>();
