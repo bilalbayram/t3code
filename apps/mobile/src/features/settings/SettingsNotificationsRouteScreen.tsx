@@ -57,7 +57,11 @@ import {
   updateLinkedEnvironmentLiveActivityPreference,
 } from "../cloud/linkEnvironment";
 import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
-import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
+import {
+  hasCloudPublicConfig,
+  resolveRelayClerkTokenOptions,
+  selfHostedRelayToken,
+} from "../cloud/publicConfig";
 import { makePermissionStatusAtom } from "../../lib/permissionStatusAtom";
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, saveMobilePreferences } from "../../state/preferences";
@@ -117,6 +121,32 @@ const linkEnvironmentWithPreference = Effect.fn("linkEnvironmentWithPreference")
     resolveMessage(msg("Could not configure environment relay access.")),
   );
 });
+
+// A relay you run yourself needs no sign-in: the token built into the app is the account, and
+// each environment is pointed at the relay on its own machine, not linked from here.
+const selfHostedToken = selfHostedRelayToken();
+
+type RelayAuth = {
+  readonly isLoaded: boolean;
+  readonly isSignedIn: boolean | undefined;
+  readonly readToken: () => Promise<string | null>;
+};
+
+const selfHostedRelayAuth: RelayAuth = {
+  isLoaded: true,
+  isSignedIn: true,
+  readToken: async () => selfHostedToken,
+};
+
+function useClerkRelayAuth(): RelayAuth {
+  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  return { isLoaded, isSignedIn, readToken: () => getToken(resolveRelayClerkTokenOptions()) };
+}
+
+// Fixed per build, so each render calls the same hook.
+const useRelayAuth: () => RelayAuth = selfHostedToken
+  ? () => selfHostedRelayAuth
+  : useClerkRelayAuth;
 
 /**
  * A policy that turns Connect off refuses relay links and preferences, which would fail the
@@ -189,7 +219,7 @@ function useNotificationsReady(): boolean {
 
 export function SettingsNotificationsRouteScreen() {
   const gt = useGT();
-  if (!hasCloudPublicConfig()) {
+  if (!hasCloudPublicConfig() && !selfHostedToken) {
     return (
       <SettingsScreen title={gt("Notifications")}>
         <ScrollView
@@ -219,7 +249,12 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const { isLoaded, isSignedIn, readToken: readRelayToken } = useRelayAuth();
+  // A self-hosted relay is linked from each server's machine, never from here.
+  const canConfigureEnvironment = (id: EnvironmentId) =>
+    !selfHostedToken &&
+    canManageConnect(id, AuthRelayConfigureScope) &&
+    canManageConnect(id, AuthRelayWriteScope);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const notificationStatus = useAtomValue(notificationStatusAtom);
   const setNotificationStatus = useAtomSet(notificationStatusAtom);
@@ -362,7 +397,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       }
       setNotificationStatus("enabled");
     }
-    const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+    const tokenResult = await settlePromise(readRelayToken);
     if (tokenResult._tag === "Failure") {
       setLiveActivityStatus("disabled");
       const error = squashAtomCommandFailure(tokenResult);
@@ -388,9 +423,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           updateEnvironment: updateEnvironmentPreference,
           linkEnvironment: linkEnvironmentWithPreference,
           saveLocalPreference,
-          canConfigureEnvironment: (id) =>
-            canManageConnect(id, AuthRelayConfigureScope) &&
-            canManageConnect(id, AuthRelayWriteScope),
+          canConfigureEnvironment,
           canUpdateEnvironment: (id) => canManageConnect(id, AuthRelayWriteScope),
           enabled: true,
           previousEnabled: liveActivitiesPreferenceEnabled,
@@ -469,7 +502,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   async function disableLiveActivities() {
     let token: string | null = null;
     if (isSignedIn) {
-      const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
+      const tokenResult = await settlePromise(readRelayToken);
       if (tokenResult._tag === "Failure") {
         setLiveActivityStatus("enabled");
         reportAtomCommandResult(tokenResult, {
@@ -486,9 +519,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           updateEnvironment: updateEnvironmentPreference,
           linkEnvironment: linkEnvironmentWithPreference,
           saveLocalPreference,
-          canConfigureEnvironment: (id) =>
-            canManageConnect(id, AuthRelayConfigureScope) &&
-            canManageConnect(id, AuthRelayWriteScope),
+          canConfigureEnvironment,
           canUpdateEnvironment: (id) => canManageConnect(id, AuthRelayWriteScope),
           enabled: false,
           previousEnabled: liveActivitiesPreferenceEnabled,
