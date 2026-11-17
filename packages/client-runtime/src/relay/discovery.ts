@@ -24,6 +24,7 @@ import * as Connectivity from "../connection/connectivity.ts";
 import { mapManagedRelayError } from "../connection/errors.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "../connection/model.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
+import { setRelayLanHttpBaseUrl } from "../connection/lanHosts.ts";
 
 export type RelayEnvironmentAvailability = "checking" | "online" | "offline" | "error";
 
@@ -279,6 +280,7 @@ export const make = Effect.fn("RelayEnvironmentDiscovery.make")(function* () {
       }
       const next = new Map<string, RelayDiscoveredEnvironment>();
       for (const environment of environments) {
+        setRelayLanHttpBaseUrl(environment.environmentId, environment.lanHttpBaseUrl);
         next.set(environment.environmentId, {
           environment,
           availability: "checking",
