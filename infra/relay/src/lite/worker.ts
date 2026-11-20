@@ -775,6 +775,7 @@ async function adminState(request: Request, env: Env): Promise<Response> {
 
 const PUBLISH = /^\/v1\/environments\/([^/]+)\/threads\/([^/]+)\/agent-activity$/;
 const WAKE = /^\/v1\/environments\/[^/]+\/hooks\/wake$/;
+const LIVE_ACTIVITY_PREFERENCE = /^\/v1\/environments\/[^/]+\/live-activity-preference$/;
 const DEVICE = /^\/v1\/mobile\/devices\/([^/]+)$/;
 const ENVIRONMENT = /^\/v1\/environments\/([^/]+)\/(connect|status|registration)$/;
 const TUNNEL = /^\/v1\/environments\/([^/]+)\/tunnel(\/recovery)?$/;
@@ -802,6 +803,12 @@ export async function handle(request: Request, env: Env, ctx: ExecutionContext):
   if (WAKE.test(path) && method === "POST") {
     return (await sameSecret(bearer(request), env.RELAY_ENVIRONMENT_CREDENTIAL))
       ? json({ pending: false })
+      : unauthorized();
+  }
+  // One person's relay: the device's own preference already decides, so there is nothing to keep.
+  if (LIVE_ACTIVITY_PREFERENCE.test(path) && method === "POST") {
+    return (await sameSecret(bearer(request), env.RELAY_ENVIRONMENT_CREDENTIAL))
+      ? json({ ok: true })
       : unauthorized();
   }
   if (path === "/v1/client/dpop-token" && method === "POST") return exchangeToken(request, env);
