@@ -50,7 +50,9 @@ fi
 mint_key="$(curl -sS --fail "$relay_url/v1/mint-public-key" | python3 -c 'import json,sys; print(json.load(sys.stdin)["publicKey"])')"
 
 # A short-lived session that may only change relay settings, revoked once done.
-session="$("$t3" auth session issue --scope relay:write --ttl 5m --label "self-hosted relay link" --json)"
+# relay:configure guards relay-config on newer servers; older ones don't know it and need relay:write alone.
+session="$("$t3" auth session issue --scope relay:configure --scope relay:write --ttl 5m --label "self-hosted relay link" --json 2>/dev/null)" ||
+  session="$("$t3" auth session issue --scope relay:write --ttl 5m --label "self-hosted relay link" --json)"
 token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"$session")"
 session_id="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("sessionId") or d.get("id") or "")' <<<"$session")"
 trap '[ -n "$session_id" ] && "$t3" auth session revoke "$session_id" >/dev/null 2>&1 || true' EXIT
